@@ -211,3 +211,58 @@ resource "aws_lb_listener" "http" {
     target_group_arn = aws_lb_target_group.app_tg.arn
   }
 }
+
+# Latest Amazon Linux 2023 AMI
+data "aws_ami" "al2023" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64*"]
+  }
+}
+
+# Launch Template for App instances
+resource "aws_launch_template" "app_lt" {
+  name_prefix   = "app-lt-"
+  image_id      = data.aws_ami.al2023.id
+  instance_type = "t3.micro"
+
+  vpc_security_group_ids = [aws_security_group.app_sg.id]
+
+  user_data = base64encode(file("${path.module}/userdata.sh"))
+
+  tag_specifications {
+    resource_type = "instance"
+    tags = {
+      Name = "app-asg-instance"
+    }
+  }
+}
+
+# Auto Scaling Group (App tier in private subnets)
+resource "aws_autoscaling_group" "app_asg" {
+  name                = "app-asg"
+  desired_capacity    = 2
+  min_size            = 2
+  max_size            = 4
+  vpc_zone_identifier = [aws_subnet.private_1.id, aws_subnet.private_2.id]
+
+  launch_template {
+    id      = aws_launch_template.app_lt.id
+    version = "$Latest"
+  }
+
+  # Attach ASG to the ALB Target Group
+  target_group_arns = [aws_lb_target_group.app_tg.arn]
+
+  health_check_type         = "ELB"
+  health_check_grace_period = 120
+
+  tag {
+    key                 = "Name"
+    value               = "app-asg-instance"
+    propagate_at_launch = true
+  }
+}
